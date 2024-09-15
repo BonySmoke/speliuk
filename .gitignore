@@ -1,0 +1,6 @@
+venv
+*.ipynb
+*.txt
+data
+__pycache__
+dist
