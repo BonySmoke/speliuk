@@ -1,6 +1,8 @@
 import kenlm
 import spacy
 import spacy_transformers
+from pymorphy3 import MorphAnalyzer
+from pymorphy3.analyzer import Parse
 from spacy.language import Language
 from spacy.tokens import Doc, Span
 from symspellpy import SymSpell
@@ -31,6 +33,7 @@ class Speliuk:
         self.nlp: Language = None
         self.kenlm_scorer: kenlm.Model = None
         self.sym_spell: SymSpell = None
+        self.morph: MorphAnalyzer = None
 
     def _load_spacy_model(self):
         if self.spacy_spelling_model_path:
@@ -60,10 +63,14 @@ class Speliuk:
         self.sym_spell = SymSpell()
         self.sym_spell.load_pickle(path)
 
+    def _load_morph_analyzer(self):
+        self.morph = MorphAnalyzer(lang="uk")
+
     def load(self):
         self._load_spacy_model()
         self._load_kenlm()
         self._load_symspell()
+        self._load_morph_analyzer()
 
     def _symspell_candidates(self, token: str):
         """
@@ -101,7 +108,11 @@ class Speliuk:
         if token not in candidates:
             candidates.append(token)
         kenlm_candidates = self._kenlm_rerank(masked_text, candidates)
-        return list(kenlm_candidates.keys())[0]
+        top_candidate = list(kenlm_candidates.keys())[0]
+        # if the original word has the same score as the target word, always use the original word
+        if kenlm_candidates[token] == kenlm_candidates[top_candidate]:
+            return token
+        return top_candidate
 
     def get_masked_text(self, doc: Doc, span: Span, window: str = 5):
         left_start = (
@@ -125,6 +136,8 @@ class Speliuk:
         spacy_doc = self.nlp(text)
         annotated_text = AnnotatedText(text)
         for ent in spacy_doc.ents:
+            if not self._valid_edit(ent):
+                continue
             start, end = ent.start_char, ent.end_char
             error_token = ent.text
             masked_text = self.get_masked_text(spacy_doc, ent)
@@ -141,6 +154,27 @@ class Speliuk:
         )
 
         return correction
+
+    def _is_person(self, parse: Parse):
+        """Check if the parsed word is a name or surname"""
+        named_grammemes = ['Name', 'Patr', 'Surn']
+        return any(g for g in named_grammemes if g in parse.tag.grammemes)
+
+    def _valid_edit(self, span: Span):
+        """
+        Minimize the number of false positives
+        """
+        text = span.text
+        print(span.text)
+        # don't process an edit if it starts with a number
+        # e.g. 5ти-поверхівка, 8ми-годинний
+        if text and text[0].isdigit():
+            return False
+        if text.istitle():
+            parses = self.morph.parse(text)
+            if parses and self._is_person(parses[0]):
+                return False
+        return True
 
 
 @dataclass
