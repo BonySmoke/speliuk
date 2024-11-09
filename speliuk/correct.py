@@ -31,18 +31,22 @@ class Speliuk:
         self.spacy_spelling_model_path = spacy_spelling_model_path
 
         self.nlp: Language = None
+        self.error_detection_pipe: Language = None
         self.kenlm_scorer: kenlm.Model = None
         self.sym_spell: SymSpell = None
         self.morph: MorphAnalyzer = None
 
     def _load_spacy_model(self):
+        self.nlp = spacy.load('uk_core_news_sm', enable=['ner'])
+
+    def _load_error_detection_pipe_model(self):
         if self.spacy_spelling_model_path:
             path = self.spacy_spelling_model_path
         else:
             base_path = snapshot_download(repo_id=self.HF_REPOSITORY)
             path = f'{base_path}/{self.DEFAULT_SPACY_MODEL_PATH}'
 
-        self.nlp = spacy.load(path)
+        self.error_detection_pipe = spacy.load(path)
 
     def _load_kenlm(self):
         if self.kenlm_path:
@@ -68,6 +72,7 @@ class Speliuk:
 
     def load(self):
         self._load_spacy_model()
+        self._load_error_detection_pipe_model()
         self._load_kenlm()
         self._load_symspell()
         self._load_morph_analyzer()
@@ -131,12 +136,32 @@ class Speliuk:
 
         return masked_text
 
+    def _set_error_spans(self, doc: Doc):
+        error_detection_doc = self.error_detection_pipe(doc.text)
+
+        error_spans: list[Span] = list()
+        for span in error_detection_doc.ents:
+            error_spans.append(
+                doc.char_span(
+                    start_idx=span.start_char,
+                    end_idx=span.end_char,
+                    label=span.label_
+                )
+            )
+        doc.spans["speliuk_errors"] = error_spans
+
+        return doc
+
     def correct(self, text: str):
         """Correct text using a Transformer model for detection"""
         spacy_doc = self.nlp(text)
+        spacy_doc = self._set_error_spans(spacy_doc)
         annotated_text = AnnotatedText(text)
-        for ent in spacy_doc.ents:
-            if not self._valid_edit(ent):
+
+        for ent in spacy_doc.spans["speliuk_errors"]:
+            ent: Span = ent
+
+            if not self._valid_edit(spacy_doc, ent):
                 continue
             start, end = ent.start_char, ent.end_char
             error_token = ent.text
@@ -160,20 +185,25 @@ class Speliuk:
         named_grammemes = ['Name', 'Patr', 'Surn']
         return any(g for g in named_grammemes if g in parse.tag.grammemes)
 
-    def _valid_edit(self, span: Span):
+    def _valid_edit(self, doc: Doc, span: Span):
         """
         Minimize the number of false positives
         """
         text = span.text
-        print(span.text)
         # don't process an edit if it starts with a number
         # e.g. 5ти-поверхівка, 8ми-годинний
         if text and text[0].isdigit():
             return False
-        if text.istitle():
-            parses = self.morph.parse(text)
-            if parses and self._is_person(parses[0]):
-                return False
+
+        span_type = doc[span.start:span.end][0].ent_type_
+
+        # span should not be a person, organization, or geopolitical entity
+        if (
+            span_type.startswith("PER")
+            or span_type == "GPE"
+            or span_type == "ORG"
+        ):
+            return False
         return True
 
 
