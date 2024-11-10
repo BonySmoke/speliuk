@@ -108,22 +108,20 @@ class CommonSpellingErrors:
         return token
 
 
-class SyntheticData:
+@Language.factory("errorifier")
+class ErrorifierPipe:
 
-    def __init__(self, data_filepath: str) -> None:
-        self.data_filepath = data_filepath
+    def __init__(self,
+                 nlp: Language,
+                 name: str,
+                 ):
+        self.nlp = nlp
+        self.name = name
         self.augmenters = self.load_augmenters()
         self.common_error_augmenter = CommonSpellingErrors()
-        self.nlp = self.load_nlp()
 
-    def load_nlp(self):
         if not Token.has_extension("error"):
             Token.set_extension("error", default="")
-
-        nlp = spacy.load("uk_core_news_sm", enable=["tokenizer"])
-        nlp.add_pipe("errorifier")
-
-        return nlp
 
     def load_augmenters(self):
         augmenters: list[CharAugmenter] = list()
@@ -146,8 +144,7 @@ class SyntheticData:
 
         return augmenters
 
-    @Language.component("errorifier")
-    def errorifier(self, doc: Doc):
+    def __call__(self, doc: Doc) -> Doc:
         """Randomly generate errors for tokens"""
         # whether to errorify a token
         options = [True, False]
@@ -176,15 +173,31 @@ class SyntheticData:
 
         return doc
 
-    def get_spacy_docs_with_error_tokens(self):
+
+class SyntheticData:
+
+    def __init__(self, data_filepath: str) -> None:
+        self.data_filepath = data_filepath
+        self.nlp = self.load_nlp()
+
+    def load_nlp(self):
+        if not Token.has_extension("error"):
+            Token.set_extension("error", default="")
+
+        nlp = spacy.load("uk_core_news_sm", enable=["tokenizer"])
+        nlp.add_pipe("errorifier")
+
+        return nlp
+
+    def _load_spacy_docs(self):
         with open(self.data_filepath, 'r') as file:
             texts = [line.strip() for line in file if line.strip()]
 
         docs = list(tqdm(self.nlp.pipe(texts)))
         return docs
 
-    def get_error_annotated_documents(self):
-        docs = self.get_spacy_docs_with_error_tokens()
+    def get_spelling_spacy_docs(self):
+        docs = self._load_spacy_docs()
         error_docs = list()
         for doc in docs:
             words = [token._.error for token in doc]
@@ -319,7 +332,9 @@ class Trainer:
     def get_training_data(self):
         ua_gec_train_corpus = UaGecSpelling().get_spelling_spacy_docs(
             Corpus(partition='train'))
-        synthetic_train_docs = SyntheticData(self.data_filepath)
+        synthetic_train_docs = SyntheticData(
+            self.data_filepath
+        ).get_spelling_spacy_docs()
 
         train_docs = synthetic_train_docs + ua_gec_train_corpus
 
