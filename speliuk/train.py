@@ -207,7 +207,8 @@ class SyntheticData:
                     continue
                 error_spans.append(error_span)
 
-            error_doc.ents = error_spans
+            # error_doc.ents = error_spans
+            error_doc.spans["speliuk"] = error_spans
             error_docs.append(error_doc)
 
         return error_docs
@@ -296,7 +297,8 @@ class UaGecSpelling:
 
                 error_spans.append(error_span)
 
-            doc.ents = error_spans
+            # doc.ents = error_spans
+            doc.spans["speliuk"] = error_spans
             spacy_docs.append(doc)
 
         return spacy_docs
